@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-
-const STORAGE_KEY = "spi-vocab-v1";
+import { supabase } from "./supabase";
 
 const RELATION_TYPES = [
   { value: "類義", label: "類義関係",    bg: "#FEF3C7", color: "#92400E", border: "#FCD34D" },
@@ -44,6 +43,7 @@ function PageBtn({ onClick, disabled, children }) {
 export default function App() {
   const [words,       setWords]       = useState([]);
   const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
   const [form,        setForm]        = useState(EMPTY);
   const [editId,      setEditId]      = useState(null);
   const [showForm,    setShowForm]    = useState(false);
@@ -57,34 +57,47 @@ export default function App() {
   const [pageSize,    setPageSize]    = useState(20);
   const [page,        setPage]        = useState(1);
 
-  // localStorageから読み込み
+  // Supabaseから読み込み
   useEffect(() => {
-    try {
-      const data = localStorage.getItem(STORAGE_KEY);
-      if (data) setWords(JSON.parse(data));
-    } catch {}
-    setLoading(false);
+    const load = async () => {
+      const { data } = await supabase
+        .from("words")
+        .select("*")
+        .order("id", { ascending: true });
+      if (data) setWords(data);
+      setLoading(false);
+    };
+    load();
   }, []);
 
-  // localStorageへ保存
-  const persist = (data) => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
-  };
-
-  const updateWords = (data) => { setWords(data); persist(data); };
-
   // 登録・更新
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const { jukugo, yomi, meaning } = form;
     if (!jukugo.trim() || !yomi.trim() || !meaning.trim()) {
       setFormError("熟語・読み仮名・意味は必須です");
       return;
     }
     setFormError("");
-    const next = editId !== null
-      ? words.map(w => w.id === editId ? { ...form, id: editId } : w)
-      : [...words, { ...form, id: Date.now() }];
-    updateWords(next);
+    setSaving(true);
+
+    if (editId !== null) {
+      // 更新
+      const { data } = await supabase
+        .from("words")
+        .update({ jukugo: form.jukugo, yomi: form.yomi, relation: form.relation, meaning: form.meaning, example: form.example })
+        .eq("id", editId)
+        .select();
+      if (data) setWords(words.map(w => w.id === editId ? data[0] : w));
+    } else {
+      // 新規登録
+      const { data } = await supabase
+        .from("words")
+        .insert([{ jukugo: form.jukugo, yomi: form.yomi, relation: form.relation, meaning: form.meaning, example: form.example }])
+        .select();
+      if (data) setWords([...words, data[0]]);
+    }
+
+    setSaving(false);
     setForm(EMPTY); setEditId(null); setShowForm(false);
   };
 
@@ -95,8 +108,9 @@ export default function App() {
   };
 
   // 削除確定
-  const handleDelete = (id) => {
-    updateWords(words.filter(w => w.id !== id));
+  const handleDelete = async (id) => {
+    await supabase.from("words").delete().eq("id", id);
+    setWords(words.filter(w => w.id !== id));
     setConfirmDel(null);
   };
 
@@ -246,13 +260,14 @@ export default function App() {
               </Field>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={handleSubmit} style={{
-                background: "#1E3A5F", color: "#fff", border: "none",
-                borderRadius: 7, padding: "9px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+              <button onClick={handleSubmit} disabled={saving} style={{
+                background: saving ? "#94A3B8" : "#1E3A5F", color: "#fff", border: "none",
+                borderRadius: 7, padding: "9px 22px", fontSize: 13, fontWeight: 700,
+                cursor: saving ? "default" : "pointer",
               }}>
-                {editId !== null ? "更新する" : "登録する"}
+                {saving ? "保存中…" : editId !== null ? "更新する" : "登録する"}
               </button>
-              <button onClick={cancelForm} style={{
+              <button onClick={cancelForm} disabled={saving} style={{
                 background: "#F5F4F0", color: "#78716C", border: "none",
                 borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer",
               }}>
@@ -264,7 +279,6 @@ export default function App() {
 
         {/* ── 検索・フィルター・ソート ── */}
         <div style={{ background: "#fff", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #E7E5E4" }}>
-          {/* 1段目：キーワード ＋ 対応関係 */}
           <div className="search-row-1">
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716C", marginBottom: 6, letterSpacing: 1 }}>KEYWORD</div>
@@ -291,7 +305,6 @@ export default function App() {
               </select>
             </div>
           </div>
-          {/* 2段目：ソート ＋ 順序 */}
           <div className="search-row-2">
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716C", marginBottom: 6, letterSpacing: 1 }}>ソート</div>
@@ -311,8 +324,6 @@ export default function App() {
 
         {/* ── テーブル ── */}
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #E7E5E4", overflow: "hidden" }}>
-
-          {/* ツールバー */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderBottom: "1px solid #F0EFEE", background: "#FAFAF9" }}>
             <div style={{ fontSize: 12, color: "#78716C" }}>
               <span style={{ fontWeight: 700, color: "#1C1917" }}>{filtered.length}</span> 件
@@ -331,7 +342,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 空状態 */}
           {rows.length === 0 ? (
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#A8A29E", fontSize: 14, lineHeight: 1.8 }}>
               {words.length === 0
@@ -367,7 +377,7 @@ export default function App() {
                       <tr key={w.id} style={{ borderBottom: "1px solid #F5F4F0", background: isConfirm ? "#FFF5F5" : undefined }}
                         onMouseEnter={e => { if (!isConfirm) e.currentTarget.style.background = "#FAFAF9"; }}
                         onMouseLeave={e => { if (!isConfirm) e.currentTarget.style.background = ""; }}>
-                        <td style={{ padding: "11px 14px", color: "#C8C4BD", fontSize: 11, width: 36 }}>
+                        <td style={{ padding: "11px 14px", color: "#C8C4BD", fontSize: 11 }}>
                           {(curPage - 1) * pageSize + i + 1}
                         </td>
                         <td style={{ padding: "11px 14px", fontWeight: 700, fontSize: 20, letterSpacing: 3, color: "#1C1917", whiteSpace: "nowrap" }}>
@@ -426,11 +436,10 @@ export default function App() {
             </div>
           )}
 
-          {/* ページネーション */}
           {totalPages > 1 && (
             <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, padding: "12px", borderTop: "1px solid #F0EFEE" }}>
-              <PageBtn onClick={() => setPage(1)}                              disabled={curPage === 1}>«</PageBtn>
-              <PageBtn onClick={() => setPage(p => Math.max(1, p - 1))}       disabled={curPage === 1}>‹</PageBtn>
+              <PageBtn onClick={() => setPage(1)}                                disabled={curPage === 1}>«</PageBtn>
+              <PageBtn onClick={() => setPage(p => Math.max(1, p - 1))}         disabled={curPage === 1}>‹</PageBtn>
               {Array.from({ length: Math.min(7, totalPages) }, (_, idx) => {
                 const start = Math.max(1, Math.min(curPage - 3, totalPages - 6));
                 return start + idx;
