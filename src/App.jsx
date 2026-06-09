@@ -7,6 +7,7 @@ const RELATION_TYPES = [
   { value: "修飾", label: "修飾関係",    bg: "#DBEAFE", color: "#1E40AF", border: "#93C5FD" },
   { value: "動作", label: "動作・目的語", bg: "#D1FAE5", color: "#065F46", border: "#6EE7B7" },
   { value: "主述", label: "主語・述語",  bg: "#EDE9FE", color: "#5B21B6", border: "#C4B5FD" },
+  { value: "その他", label: "その他",    bg: "#F5F4F0", color: "#57534E", border: "#D6D3D1" },
 ];
 const RMAP = Object.fromEntries(RELATION_TYPES.map(r => [r.value, r]));
 const EMPTY = { jukugo: "", yomi: "", relation: "類義", meaning: "", example: "" };
