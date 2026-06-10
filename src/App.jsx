@@ -163,11 +163,11 @@ function QuizMode({ words }) {
     const progress = ((currentIdx + (selected !== null ? 1 : 0)) / questions.length) * 100;
 
     return (
-      <div style={{ ...ff, display: "flex", justifyContent: "center", padding: "32px 16px" }}>
+      <div style={{ ...ff, display: "flex", justifyContent: "center", padding: "16px 16px" }}>
         <div style={{ maxWidth: 480, width: "100%" }}>
 
           {/* 進捗 */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span style={{ fontSize: 13, color: "#78716C", fontWeight: 600 }}>
               第 <span style={{ color: "#1C1917", fontSize: 16 }}>{currentIdx + 1}</span> 問
               <span style={{ color: "#A8A29E" }}> / {questions.length}問</span>
@@ -176,19 +176,19 @@ function QuizMode({ words }) {
               ✅ {answers.filter(a => a.isCorrect).length} / {answers.length}
             </span>
           </div>
-          <div style={{ height: 6, background: "#E7E5E4", borderRadius: 3, marginBottom: 24 }}>
+          <div style={{ height: 6, background: "#E7E5E4", borderRadius: 3, marginBottom: 16 }}>
             <div style={{ height: "100%", background: "#1E3A5F", borderRadius: 3, width: `${progress}%`, transition: "width 0.3s" }} />
           </div>
 
           {/* 問題カード */}
-          <div style={{ background: "#fff", borderRadius: 16, padding: "32px 24px", border: "1px solid #E7E5E4", textAlign: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 11, letterSpacing: 3, color: "#A8A29E", marginBottom: 12 }}>この熟語の対応関係は？</div>
-            <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: 8, color: "#1C1917", marginBottom: 8 }}>{q.word.jukugo}</div>
+          <div style={{ background: "#fff", borderRadius: 16, padding: "27px 24px", border: "1px solid #E7E5E4", textAlign: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, letterSpacing: 3, color: "#A8A29E", marginBottom: 8 }}>この熟語の対応関係は？</div>
+            <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: 8, color: "#1C1917", marginBottom: 4 }}>{q.word.jukugo}</div>
             <div style={{ fontSize: 14, color: "#A8A29E" }}>{q.word.yomi}</div>
           </div>
 
           {/* 選択肢 */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginBottom: 10 }}>
             {q.choices.map(choice => {
               const rel = RMAP[choice];
               let bg = "#fff", border = "#E7E5E4", color = "#1C1917", icon = "";
@@ -201,7 +201,7 @@ function QuizMode({ words }) {
                 <button key={choice} onClick={() => handleAnswer(choice)} disabled={selected !== null}
                   style={{
                     background: bg, color, border: `2px solid ${border}`,
-                    borderRadius: 10, padding: "14px 18px", fontSize: 14, fontWeight: 700,
+                    borderRadius: 10, padding: "13px 18px", fontSize: 14, fontWeight: 700,
                     cursor: selected !== null ? "default" : "pointer",
                     transition: "all 0.15s", textAlign: "center",
                   }}>
@@ -216,7 +216,7 @@ function QuizMode({ words }) {
             <div style={{
               background: isCorrect ? "#D1FAE5" : "#FEE2E2",
               border: `1px solid ${isCorrect ? "#6EE7B7" : "#FCA5A5"}`,
-              borderRadius: 12, padding: "14px 18px", marginBottom: 14,
+              borderRadius: 12, padding: "12px 18px", marginBottom: 10,
             }}>
               <div style={{ fontWeight: 700, color: isCorrect ? "#065F46" : "#991B1B", marginBottom: 6, fontSize: 15 }}>
                 {isCorrect ? "✅ 正解！" : `❌ 不正解　→ 正解は「${q.correct}」`}
@@ -421,7 +421,7 @@ export default function App() {
         <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex" }}>
           {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"]].map(([tab, label]) => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
-              background: "none", border: "none", padding: "12px 24px",
+              background: "none", border: "none", padding: "10px 24px",
               fontSize: 14, fontWeight: activeTab === tab ? 700 : 400,
               color: activeTab === tab ? "#1E3A5F" : "#78716C",
               borderBottom: activeTab === tab ? "2px solid #1E3A5F" : "2px solid transparent",
