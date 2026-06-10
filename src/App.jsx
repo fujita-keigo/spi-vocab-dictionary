@@ -301,6 +301,7 @@ export default function App() {
   const [pageSize,    setPageSize]    = useState(20);
   const [page,        setPage]        = useState(1);
   const [activeTab,   setActiveTab]   = useState("list");
+  const [dupWarning,  setDupWarning]  = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -329,7 +330,7 @@ export default function App() {
 
   const startEdit = (w) => {
     setForm({ jukugo: w.jukugo, yomi: w.yomi, relation: w.relation, meaning: w.meaning, example: w.example || "" });
-    setEditId(w.id); setShowForm(true); setFormError(""); setConfirmDel(null);
+    setEditId(w.id); setShowForm(true); setFormError(""); setConfirmDel(null); setDupWarning(false);
   };
 
   const handleDelete = async (id) => {
@@ -338,7 +339,7 @@ export default function App() {
     setConfirmDel(null);
   };
 
-  const cancelForm = () => { setForm(EMPTY); setEditId(null); setShowForm(false); setFormError(""); };
+  const cancelForm = () => { setForm(EMPTY); setEditId(null); setShowForm(false); setFormError(""); setDupWarning(false); };
 
   const filtered = words
     .filter(w => {
@@ -431,7 +432,18 @@ export default function App() {
               </div>
               {formError && <div style={{ background: "#FEE2E2", color: "#991B1B", borderRadius: 6, padding: "8px 12px", fontSize: 12, marginBottom: 12 }}>{formError}</div>}
               <div className="form-row-top">
-                <Field label="熟語 ＊"><input value={form.jukugo} onChange={e => setForm({ ...form, jukugo: e.target.value })} placeholder="例：温暖" style={inp} /></Field>
+                <Field label="熟語 ＊">
+                  <input value={form.jukugo} onChange={e => {
+                    const val = e.target.value;
+                    setForm({ ...form, jukugo: val });
+                    setDupWarning(val.trim() !== "" && words.some(w => w.jukugo === val.trim() && w.id !== editId));
+                  }} placeholder="例：温暖" style={inp} />
+                  {dupWarning && (
+                    <div style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 4, padding: "4px 8px", marginTop: 4 }}>
+                      ⚠️ 「{form.jukugo}」は既に登録されています
+                    </div>
+                  )}
+                </Field>
                 <Field label="読み仮名 ＊"><input value={form.yomi} onChange={e => setForm({ ...form, yomi: e.target.value })} placeholder="例：おんだん" style={inp} /></Field>
                 <Field label="対応関係 ＊">
                   <select value={form.relation} onChange={e => setForm({ ...form, relation: e.target.value })} style={{ ...inp, background: "#fff" }}>
