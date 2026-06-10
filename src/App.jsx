@@ -2,12 +2,18 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
 
 const RELATION_TYPES = [
-  { value: "類義", label: "類義関係",    bg: "#FEF3C7", color: "#92400E", border: "#FCD34D" },
-  { value: "対義", label: "対義関係",    bg: "#FEE2E2", color: "#991B1B", border: "#FCA5A5" },
-  { value: "修飾", label: "修飾関係",    bg: "#DBEAFE", color: "#1E40AF", border: "#93C5FD" },
-  { value: "動作", label: "動作・目的語", bg: "#D1FAE5", color: "#065F46", border: "#6EE7B7" },
-  { value: "主述", label: "主語・述語",  bg: "#EDE9FE", color: "#5B21B6", border: "#C4B5FD" },
-  { value: "その他", label: "その他",    bg: "#F5F4F0", color: "#57534E", border: "#D6D3D1" },
+  { value: "類義", label: "類義関係",    bg: "#FEF3C7", color: "#92400E", border: "#FCD34D",
+    quizParts: [{ text: "似た意味", ul: true }, { text: "を持つ漢字を重ねる", ul: false }] },
+  { value: "対義", label: "対義関係",    bg: "#FEE2E2", color: "#991B1B", border: "#FCA5A5",
+    quizParts: [{ text: "反対の意味", ul: true }, { text: "をもつ漢字を重ねる", ul: false }] },
+  { value: "修飾", label: "修飾関係",    bg: "#DBEAFE", color: "#1E40AF", border: "#93C5FD",
+    quizParts: [{ text: "前の漢字が後の漢字を", ul: false }, { text: "修飾する", ul: true }] },
+  { value: "動作", label: "動作・目的語", bg: "#D1FAE5", color: "#065F46", border: "#6EE7B7",
+    quizParts: [{ text: "動詞の後に目的語", ul: true }, { text: "をおく", ul: false }] },
+  { value: "主述", label: "主語・述語",  bg: "#EDE9FE", color: "#5B21B6", border: "#C4B5FD",
+    quizParts: [{ text: "主語と述語", ul: true }, { text: "の関係にある", ul: false }] },
+  { value: "その他", label: "その他",    bg: "#F5F4F0", color: "#57534E", border: "#D6D3D1",
+    quizParts: [{ text: "その他", ul: false }] },
 ];
 const RELATION_VALUES = RELATION_TYPES.map(r => r.value);
 const RMAP = Object.fromEntries(RELATION_TYPES.map(r => [r.value, r]));
@@ -88,6 +94,22 @@ function QuizMode({ words }) {
     }
   };
 
+  // アンダーライン付きラベルを描画
+  const renderLabel = (choiceValue, icon) => {
+    const rel = RMAP[choiceValue];
+    const parts = rel?.quizParts ?? [{ text: choiceValue, ul: false }];
+    return (
+      <>
+        {parts.map((p, i) =>
+          p.ul
+            ? <span key={i} style={{ textDecoration: "underline", textUnderlineOffset: "3px" }}>{p.text}</span>
+            : <span key={i}>{p.text}</span>
+        )}
+        {icon}
+      </>
+    );
+  };
+
   const ff = { fontFamily: "'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif" };
 
   // ── 設定画面 ──
@@ -166,7 +188,7 @@ function QuizMode({ words }) {
           </div>
 
           {/* 選択肢 */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10, marginBottom: 16 }}>
             {q.choices.map(choice => {
               const rel = RMAP[choice];
               let bg = "#fff", border = "#E7E5E4", color = "#1C1917", icon = "";
@@ -179,11 +201,11 @@ function QuizMode({ words }) {
                 <button key={choice} onClick={() => handleAnswer(choice)} disabled={selected !== null}
                   style={{
                     background: bg, color, border: `2px solid ${border}`,
-                    borderRadius: 10, padding: "14px 10px", fontSize: 14, fontWeight: 700,
+                    borderRadius: 10, padding: "14px 18px", fontSize: 14, fontWeight: 700,
                     cursor: selected !== null ? "default" : "pointer",
                     transition: "all 0.15s", textAlign: "center",
                   }}>
-                  {choice}{icon}
+                  {renderLabel(choice, icon)}
                 </button>
               );
             })}
