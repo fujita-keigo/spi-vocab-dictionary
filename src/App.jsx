@@ -305,6 +305,208 @@ function QuizMode({ words }) {
   }
 }
 
+// ── 設定モード（エクスポート/インポート）──────────────────
+function SettingsMode({ words, setWords }) {
+  const [result, setResult] = useState(null); // { added, skipped, errors: [] }
+  const [importing, setImporting] = useState(false);
+
+  const today = () => {
+    const d = new Date();
+    const p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+
+  // ── エクスポート（JSON）──
+  const exportJSON = () => {
+    const data = words.map(({ jukugo, yomi, relation, meaning, example }) =>
+      ({ jukugo, yomi, relation, meaning, example: example || "" }));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    downloadBlob(blob, `spi-vocab-backup-${today()}.json`);
+  };
+
+  // ── エクスポート（CSV）──
+  const exportCSV = () => {
+    const esc = v => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = "熟語,読み仮名,対応関係,意味,例文";
+    const lines = words.map(w =>
+      [w.jukugo, w.yomi, w.relation, w.meaning, w.example || ""].map(esc).join(","));
+    const csv = "\uFEFF" + [header, ...lines].join("\r\n"); // BOM付きでExcel文字化け防止
+    downloadBlob(new Blob([csv], { type: "text/csv" }), `spi-vocab-backup-${today()}.csv`);
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── CSVを行→フィールド配列にパース（引用符対応）──
+  const parseCSV = (text) => {
+    const rows = [];
+    let row = [], field = "", inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ",") { row.push(field); field = ""; }
+        else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+        else if (c === "\r") { /* skip */ }
+        else field += c;
+      }
+    }
+    if (field !== "" || row.length > 0) { row.push(field); rows.push(row); }
+    return rows;
+  };
+
+  // ── インポート共通処理 ──
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 同じファイル再選択を可能に
+    if (!file) return;
+    setImporting(true);
+    setResult(null);
+
+    try {
+      const text = await file.text();
+      let records = [];
+
+      if (file.name.toLowerCase().endsWith(".json")) {
+        const parsed = JSON.parse(text);
+        if (!Array.isArray(parsed)) throw new Error("JSONが配列形式ではありません");
+        records = parsed.map((r, i) => ({ row: i + 1, ...r }));
+      } else if (file.name.toLowerCase().endsWith(".csv")) {
+        const rows = parseCSV(text).filter(r => r.some(c => c.trim() !== ""));
+        if (rows.length <= 1) throw new Error("データ行がありません");
+        // 1行目はヘッダーとしてスキップ
+        records = rows.slice(1).map((cols, i) => ({
+          row: i + 2, // ヘッダーが1行目なので+2
+          jukugo: cols[0]?.trim() ?? "",
+          yomi: cols[1]?.trim() ?? "",
+          relation: cols[2]?.trim() ?? "",
+          meaning: cols[3]?.trim() ?? "",
+          example: cols[4]?.trim() ?? "",
+        }));
+      } else {
+        throw new Error("対応していないファイル形式です（.json または .csv）");
+      }
+
+      // バリデーション & 重複チェック
+      const existing = new Set(words.map(w => w.jukugo));
+      const seen = new Set(); // 同一ファイル内重複も検出
+      const toInsert = [];
+      const errors = [];
+      let skipped = 0;
+
+      for (const r of records) {
+        const jukugo = (r.jukugo ?? "").trim();
+        const yomi = (r.yomi ?? "").trim();
+        const relation = (r.relation ?? "").trim();
+        const meaning = (r.meaning ?? "").trim();
+        const example = (r.example ?? "").trim();
+
+        if (!jukugo || !yomi || !meaning) {
+          errors.push(`${r.row}行目：熟語・読み仮名・意味は必須です`);
+          continue;
+        }
+        if (!RELATION_VALUES.includes(relation)) {
+          errors.push(`${r.row}行目：対応関係「${relation}」は無効です（${RELATION_VALUES.join("/")} のいずれか）`);
+          continue;
+        }
+        if (existing.has(jukugo) || seen.has(jukugo)) { skipped++; continue; }
+        seen.add(jukugo);
+        toInsert.push({ jukugo, yomi, relation, meaning, example });
+      }
+
+      // Supabaseへ一括登録
+      let added = 0;
+      if (toInsert.length > 0) {
+        const { data, error } = await supabase.from("words").insert(toInsert).select();
+        if (error) throw new Error("保存に失敗しました：" + error.message);
+        if (data) { setWords([...words, ...data]); added = data.length; }
+      }
+
+      setResult({ added, skipped, errors });
+    } catch (err) {
+      setResult({ added: 0, skipped: 0, errors: [err.message] });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const ff = { fontFamily: "'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif" };
+  const card = { background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #E7E5E4", marginBottom: 16 };
+  const btn = (bg, color, border) => ({
+    background: bg, color, border: border || "none", borderRadius: 8,
+    padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+  });
+
+  return (
+    <div style={{ ...ff, maxWidth: 640, margin: "0 auto", padding: "24px 16px" }}>
+
+      {/* エクスポート */}
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1C1917", marginBottom: 4 }}>📤 エクスポート（バックアップ）</div>
+        <div style={{ fontSize: 12, color: "#78716C", marginBottom: 14, lineHeight: 1.6 }}>
+          登録中の全 {words.length} 語をファイルに保存します。定期的に保存しておくと安心です。
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={exportJSON} disabled={words.length === 0} style={btn("#1E3A5F", "#fff")}>JSONで保存</button>
+          <button onClick={exportCSV} disabled={words.length === 0} style={btn("#F5F4F0", "#374151", "1px solid #D6D3D1")}>CSVで保存</button>
+        </div>
+      </div>
+
+      {/* インポート */}
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1C1917", marginBottom: 4 }}>📥 インポート（追加）</div>
+        <div style={{ fontSize: 12, color: "#78716C", marginBottom: 14, lineHeight: 1.6 }}>
+          JSON または CSV ファイルから熟語を追加します。<br />
+          既存の熟語と同じものは自動でスキップされます（既存データは消えません）。
+        </div>
+        <label style={{ ...btn("#065F46", "#fff"), display: "inline-block" }}>
+          {importing ? "読み込み中…" : "ファイルを選択"}
+          <input type="file" accept=".json,.csv" onChange={handleFile} disabled={importing}
+            style={{ display: "none" }} />
+        </label>
+        <div style={{ fontSize: 11, color: "#A8A29E", marginTop: 10, lineHeight: 1.6 }}>
+          CSV形式：1行目はヘッダー（熟語,読み仮名,対応関係,意味,例文）。<br />
+          対応関係は「{RELATION_VALUES.join(" / ")}」のいずれか。
+        </div>
+      </div>
+
+      {/* 結果パネル */}
+      {result && (
+        <div style={{ ...card, border: result.errors.length > 0 ? "1px solid #FCA5A5" : "1px solid #6EE7B7" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#1C1917" }}>インポート結果</div>
+            <button onClick={() => setResult(null)} style={{ background: "none", border: "none", fontSize: 18, color: "#A8A29E", cursor: "pointer", lineHeight: 1 }}>×</button>
+          </div>
+          <div style={{ display: "flex", gap: 16, marginBottom: result.errors.length > 0 ? 12 : 0 }}>
+            <span style={{ fontSize: 13, color: "#065F46", fontWeight: 700 }}>✅ {result.added} 件追加</span>
+            <span style={{ fontSize: 13, color: "#92400E", fontWeight: 700 }}>⏭️ {result.skipped} 件スキップ</span>
+            <span style={{ fontSize: 13, color: "#991B1B", fontWeight: 700 }}>⚠️ {result.errors.length} 件エラー</span>
+          </div>
+          {result.errors.length > 0 && (
+            <div style={{ background: "#FFF5F5", borderRadius: 8, padding: "10px 12px", maxHeight: 200, overflowY: "auto" }}>
+              {result.errors.map((e, i) => (
+                <div key={i} style={{ fontSize: 12, color: "#991B1B", lineHeight: 1.7 }}>{e}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── メインアプリ ──────────────────────────────────────────
 export default function App() {
   const [words,       setWords]       = useState([]);
@@ -419,7 +621,7 @@ export default function App() {
       {/* ── タブ ── */}
       <div style={{ background: "#fff", borderBottom: "1px solid #E7E5E4" }}>
         <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex" }}>
-          {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"]].map(([tab, label]) => (
+          {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"], ["settings", "⚙️ 設定"]].map(([tab, label]) => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
               background: "none", border: "none", padding: "10px 24px",
               fontSize: 14, fontWeight: activeTab === tab ? 700 : 400,
@@ -433,6 +635,9 @@ export default function App() {
 
       {/* ── クイズタブ ── */}
       {activeTab === "quiz" && <QuizMode words={words} />}
+
+      {/* ── 設定タブ ── */}
+      {activeTab === "settings" && <SettingsMode words={words} setWords={setWords} />}
 
       {/* ── 一覧タブ ── */}
       {activeTab === "list" && (
