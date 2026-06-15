@@ -527,6 +527,42 @@ export default function App() {
   const [activeTab,   setActiveTab]   = useState("list");
   const [dupWarning,  setDupWarning]  = useState(false);
 
+  // ── 認証関連 ──
+  const isAdminUrl = typeof window !== "undefined" && window.location.pathname.startsWith("/adminmoushiwaonly");
+  const [session,     setSession]     = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginEmail,  setLoginEmail]  = useState("");
+  const [loginPass,   setLoginPass]   = useState("");
+  const [loginError,  setLoginError]  = useState("");
+  const [loggingIn,   setLoggingIn]   = useState(false);
+  const isAdmin = !!session; // ログイン済み = 管理者
+
+  // ログイン状態の監視
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthChecked(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const handleLogin = async () => {
+    setLoginError("");
+    setLoggingIn(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPass });
+    setLoggingIn(false);
+    if (error) { setLoginError("メールアドレスまたはパスワードが正しくありません"); return; }
+    setLoginEmail(""); setLoginPass("");
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setActiveTab("list");
+  };
+
   useEffect(() => {
     const load = async () => {
       const { data } = await supabase.from("words").select("*").order("id", { ascending: true });
@@ -587,8 +623,45 @@ export default function App() {
   const rows       = filtered.slice((curPage - 1) * pageSize, curPage * pageSize);
   const ff = { fontFamily: "'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif" };
 
-  if (loading) return (
+  if (loading || !authChecked) return (
     <div style={{ ...ff, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#F5F4F0", color: "#78716C" }}>読み込み中…</div>
+  );
+
+  // 管理者URLにアクセスしたが未ログイン → ログイン画面
+  if (isAdminUrl && !isAdmin) return (
+    <div style={{ ...ff, background: "#F5F4F0", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 16px" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 32, maxWidth: 360, width: "100%", border: "1px solid #E7E5E4" }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>🔐</div>
+          <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: "#1C1917" }}>管理者ログイン</h2>
+          <p style={{ margin: 0, fontSize: 12, color: "#A8A29E" }}>SPI熟語学習アプリ</p>
+        </div>
+        {loginError && (
+          <div style={{ background: "#FEE2E2", color: "#991B1B", borderRadius: 6, padding: "8px 12px", fontSize: 12, marginBottom: 14 }}>
+            {loginError}
+          </div>
+        )}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#78716C", marginBottom: 5 }}>メールアドレス</div>
+          <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleLogin()}
+            placeholder="you@example.com" style={inp} />
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#78716C", marginBottom: 5 }}>パスワード</div>
+          <input type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleLogin()}
+            placeholder="••••••••" style={inp} />
+        </div>
+        <button onClick={handleLogin} disabled={loggingIn} style={{
+          background: loggingIn ? "#94A3B8" : "#1E3A5F", color: "#fff", border: "none",
+          borderRadius: 8, padding: "12px 0", fontSize: 14, fontWeight: 700,
+          cursor: loggingIn ? "default" : "pointer", width: "100%",
+        }}>
+          {loggingIn ? "ログイン中…" : "ログイン"}
+        </button>
+      </div>
+    </div>
   );
 
   return (
@@ -614,14 +687,25 @@ export default function App() {
             <div style={{ fontSize: 10, letterSpacing: 4, color: "#C85250", fontWeight: 700, marginBottom: 2 }}>SPI 対策ノート</div>
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#1C1917", letterSpacing: 1 }}>二字熟語 対応関係</h1>
           </div>
-          <div style={{ fontSize: 12, color: "#A8A29E" }}>全 <span style={{ fontWeight: 700, color: "#1C1917" }}>{words.length}</span> 語</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ fontSize: 12, color: "#A8A29E" }}>全 <span style={{ fontWeight: 700, color: "#1C1917" }}>{words.length}</span> 語</div>
+            {isAdmin && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ background: "#1E3A5F", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "3px 8px", letterSpacing: 0.5 }}>管理者</span>
+                <button onClick={handleLogout} style={{
+                  background: "#F5F4F0", color: "#78716C", border: "1px solid #E7E5E4",
+                  borderRadius: 6, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600,
+                }}>ログアウト</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* ── タブ ── */}
       <div style={{ background: "#fff", borderBottom: "1px solid #E7E5E4" }}>
         <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex" }}>
-          {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"], ["settings", "⚙️ 設定"]].map(([tab, label]) => (
+          {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"], ...(isAdmin ? [["settings", "⚙️ 設定"]] : [])].map(([tab, label]) => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
               background: "none", border: "none", padding: "10px 24px",
               fontSize: 14, fontWeight: activeTab === tab ? 700 : 400,
@@ -637,19 +721,21 @@ export default function App() {
       {activeTab === "quiz" && <QuizMode words={words} />}
 
       {/* ── 設定タブ ── */}
-      {activeTab === "settings" && <SettingsMode words={words} setWords={setWords} />}
+      {activeTab === "settings" && isAdmin && <SettingsMode words={words} setWords={setWords} />}
 
       {/* ── 一覧タブ ── */}
       {activeTab === "list" && (
         <div style={{ maxWidth: 1120, margin: "0 auto", padding: "20px 16px" }}>
 
-          {/* 登録ボタン */}
+          {/* 登録ボタン（管理者のみ）*/}
+          {isAdmin && (
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
             <button onClick={() => showForm ? cancelForm() : setShowForm(true)} style={{
               background: showForm ? "#E7E5E4" : "#1E3A5F", color: showForm ? "#78716C" : "#fff",
               border: "none", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer",
             }}>{showForm ? "✕ キャンセル" : "＋ 新規登録"}</button>
           </div>
+          )}
 
           {/* 登録フォーム */}
           {showForm && (
@@ -754,11 +840,11 @@ export default function App() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: 36 }} /><col style={{ width: 68 }} /><col style={{ width: 100 }} />
-                    <col style={{ width: 112 }} /><col style={{ width: 240 }} /><col style={{ width: 240 }} /><col style={{ width: 136 }} />
+                    <col style={{ width: 112 }} /><col style={{ width: 240 }} /><col style={{ width: 240 }} />{isAdmin && <col style={{ width: 136 }} />}
                   </colgroup>
                   <thead>
                     <tr style={{ borderBottom: "2px solid #E7E5E4", background: "#FAFAF9" }}>
-                      {["#","熟語","読み仮名","対応関係","意味","例文","操作"].map(h => (
+                      {["#","熟語","読み仮名","対応関係","意味","例文", ...(isAdmin ? ["操作"] : [])].map(h => (
                         <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#78716C", letterSpacing: 1, whiteSpace: "nowrap" }}>{h}</th>
                       ))}
                     </tr>
@@ -779,6 +865,7 @@ export default function App() {
                           </td>
                           <td style={{ padding: "11px 14px", color: "#292524", lineHeight: 1.6 }}>{w.meaning}</td>
                           <td style={{ padding: "11px 14px", color: "#78716C", fontSize: 13 }}>{w.example || <span style={{ color: "#D6D3D1" }}>—</span>}</td>
+                          {isAdmin && (
                           <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
                             {isConfirm ? (
                               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -793,6 +880,7 @@ export default function App() {
                               </>
                             )}
                           </td>
+                          )}
                         </tr>
                       );
                     })}
