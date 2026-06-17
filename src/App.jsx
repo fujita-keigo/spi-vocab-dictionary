@@ -526,6 +526,8 @@ export default function App() {
   const [page,        setPage]        = useState(1);
   const [activeTab,   setActiveTab]   = useState("list");
   const [dupWarning,  setDupWarning]  = useState(false);
+  const [requestSent, setRequestSent] = useState(false); // 申請完了メッセージ
+  const [cooldown,    setCooldown]    = useState(false);  // 連打防止
 
   // ── 認証関連 ──
   const isAdminUrl = typeof window !== "undefined" && window.location.pathname.startsWith("/adminmoushiwaonly");
@@ -572,6 +574,7 @@ export default function App() {
     load();
   }, []);
 
+  // 管理者：直接登録/更新
   const handleSubmit = async () => {
     const { jukugo, yomi, meaning } = form;
     if (!jukugo.trim() || !yomi.trim() || !meaning.trim()) { setFormError("熟語・読み仮名・意味は必須です"); return; }
@@ -586,6 +589,25 @@ export default function App() {
     }
     setSaving(false);
     setForm(EMPTY); setEditId(null); setShowForm(false);
+  };
+
+  // 一般ユーザー：登録リクエスト送信
+  const handleRequest = async () => {
+    const { jukugo, yomi, relation } = form;
+    if (!jukugo.trim() || !yomi.trim() || !relation.trim()) { setFormError("熟語・読み仮名・対応関係は必須です"); return; }
+    setFormError("");
+    setSaving(true);
+    const { error } = await supabase.from("word_requests").insert([{
+      jukugo: form.jukugo.trim(), yomi: form.yomi.trim(), relation: form.relation,
+      meaning: form.meaning.trim(), example: form.example.trim(), status: "pending",
+    }]);
+    setSaving(false);
+    if (error) { setFormError("送信に失敗しました。時間をおいて再度お試しください"); return; }
+    setForm(EMPTY); setShowForm(false); setDupWarning(false);
+    setRequestSent(true);
+    // 連打防止：5秒間クールダウン
+    setCooldown(true);
+    setTimeout(() => setCooldown(false), 5000);
   };
 
   const startEdit = (w) => {
@@ -727,22 +749,31 @@ export default function App() {
       {activeTab === "list" && (
         <div style={{ maxWidth: 1120, margin: "0 auto", padding: "20px 16px" }}>
 
-          {/* 登録ボタン（管理者のみ）*/}
-          {isAdmin && (
+          {/* 申請完了メッセージ（一般ユーザー）*/}
+          {!isAdmin && requestSent && (
+            <div style={{ background: "#D1FAE5", border: "1px solid #6EE7B7", borderRadius: 10, padding: "14px 18px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 13, color: "#065F46", fontWeight: 700 }}>
+                ✅ 申請を受け付けました。管理者の承認後に反映されます。
+              </span>
+              <button onClick={() => setRequestSent(false)} style={{ background: "none", border: "none", fontSize: 18, color: "#065F46", cursor: "pointer", lineHeight: 1 }}>×</button>
+            </div>
+          )}
+
+          {/* 登録/リクエストボタン */}
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
             <button onClick={() => showForm ? cancelForm() : setShowForm(true)} style={{
               background: showForm ? "#E7E5E4" : "#1E3A5F", color: showForm ? "#78716C" : "#fff",
               border: "none", borderRadius: 8, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer",
-            }}>{showForm ? "✕ キャンセル" : "＋ 新規登録"}</button>
+            }}>{showForm ? "✕ キャンセル" : isAdmin ? "＋ 新規登録" : "＋ 登録リクエスト"}</button>
           </div>
-          )}
 
-          {/* 登録フォーム */}
+          {/* 登録/リクエストフォーム */}
           {showForm && (
             <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 20, border: "2px solid rgba(30,58,95,0.12)", boxShadow: "0 4px 20px rgba(30,58,95,0.07)" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A5F", marginBottom: 14 }}>
-                {editId !== null ? "✏️ 熟語を編集" : "📝 新しい熟語を登録"}
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A5F", marginBottom: 4 }}>
+                {editId !== null ? "✏️ 熟語を編集" : isAdmin ? "📝 新しい熟語を登録" : "📝 新しい熟語の登録をリクエスト"}
               </div>
+              <div style={{ fontSize: 11, color: "#A8A29E", marginBottom: 14 }}>＊ がついている項目の入力は必須です</div>
               {formError && <div style={{ background: "#FEE2E2", color: "#991B1B", borderRadius: 6, padding: "8px 12px", fontSize: 12, marginBottom: 12 }}>{formError}</div>}
               <div className="form-row-top">
                 <Field label="熟語 ＊">
@@ -762,16 +793,27 @@ export default function App() {
                   <select value={form.relation} onChange={e => setForm({ ...form, relation: e.target.value })} style={{ ...inp, background: "#fff" }}>
                     {RELATION_TYPES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
+                  {!isAdmin && (() => {
+                    const rel = RMAP[form.relation];
+                    const desc = rel?.quizParts?.map(p => p.text).join("") ?? "";
+                    return <div style={{ fontSize: 11, color: "#78716C", marginTop: 4, lineHeight: 1.5 }}>{desc}</div>;
+                  })()}
                 </Field>
               </div>
               <div className="form-row-bottom">
-                <Field label="意味 ＊"><input value={form.meaning} onChange={e => setForm({ ...form, meaning: e.target.value })} placeholder="例：あたたかいこと" style={inp} /></Field>
+                <Field label={isAdmin ? "意味 ＊" : "意味"}><input value={form.meaning} onChange={e => setForm({ ...form, meaning: e.target.value })} placeholder="例：あたたかいこと" style={inp} /></Field>
                 <Field label="例文"><input value={form.example} onChange={e => setForm({ ...form, example: e.target.value })} placeholder="例：今年の冬は温暖だった" style={inp} /></Field>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={handleSubmit} disabled={saving} style={{ background: saving ? "#94A3B8" : "#1E3A5F", color: "#fff", border: "none", borderRadius: 7, padding: "9px 22px", fontSize: 13, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>
-                  {saving ? "保存中…" : editId !== null ? "更新する" : "登録する"}
-                </button>
+                {isAdmin ? (
+                  <button onClick={handleSubmit} disabled={saving} style={{ background: saving ? "#94A3B8" : "#1E3A5F", color: "#fff", border: "none", borderRadius: 7, padding: "9px 22px", fontSize: 13, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>
+                    {saving ? "保存中…" : editId !== null ? "更新する" : "登録する"}
+                  </button>
+                ) : (
+                  <button onClick={handleRequest} disabled={saving || cooldown} style={{ background: (saving || cooldown) ? "#94A3B8" : "#1E3A5F", color: "#fff", border: "none", borderRadius: 7, padding: "9px 22px", fontSize: 13, fontWeight: 700, cursor: (saving || cooldown) ? "default" : "pointer" }}>
+                    {saving ? "送信中…" : cooldown ? "送信しました" : "リクエストする"}
+                  </button>
+                )}
                 <button onClick={cancelForm} style={{ background: "#F5F4F0", color: "#78716C", border: "none", borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>キャンセル</button>
               </div>
             </div>
