@@ -791,13 +791,12 @@ export default function App() {
                 <Field label="読み仮名 ＊"><input value={form.yomi} onChange={e => setForm({ ...form, yomi: e.target.value })} placeholder="例：おんだん" style={inp} /></Field>
                 <Field label="対応関係 ＊">
                   <select value={form.relation} onChange={e => setForm({ ...form, relation: e.target.value })} style={{ ...inp, background: "#fff" }}>
-                    {RELATION_TYPES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                    {RELATION_TYPES.map(r => {
+                      const desc = r.quizParts?.map(p => p.text).join("") ?? "";
+                      const general = (desc && desc !== r.value) ? `${r.value}　(${desc})` : r.value;
+                      return <option key={r.value} value={r.value}>{isAdmin ? r.label : general}</option>;
+                    })}
                   </select>
-                  {!isAdmin && (() => {
-                    const rel = RMAP[form.relation];
-                    const desc = rel?.quizParts?.map(p => p.text).join("") ?? "";
-                    return <div style={{ fontSize: 11, color: "#78716C", marginTop: 4, lineHeight: 1.5 }}>{desc}</div>;
-                  })()}
                 </Field>
               </div>
               <div className="form-row-bottom">
