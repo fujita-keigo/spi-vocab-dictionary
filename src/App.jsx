@@ -507,6 +507,340 @@ function SettingsMode({ words, setWords }) {
   );
 }
 
+// ── リクエスト承認モード（管理者）──────────────────────────
+function RequestsMode({ words, setWords }) {
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [statusTab, setStatusTab] = useState("pending");
+  const [selected, setSelected] = useState(new Set());
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(1);
+  const [processing, setProcessing] = useState(false);
+  const [notice, setNotice] = useState(null); // { approved, skipped, rejected, deleted, reverted }
+  const [confirm, setConfirm] = useState(null); // { action, ids, label }
+
+  // 読み込み
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from("word_requests").select("*").order("created_at", { ascending: true });
+      if (data) setRequests(data);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const ff = { fontFamily: "'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif" };
+
+  const counts = {
+    pending: requests.filter(r => r.status === "pending").length,
+    approved: requests.filter(r => r.status === "approved").length,
+    rejected: requests.filter(r => r.status === "rejected").length,
+  };
+
+  const inThisTab = requests.filter(r => r.status === statusTab).sort((a, b) => a.id - b.id);
+  const totalPages = Math.max(1, Math.ceil(inThisTab.length / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const rows = inThisTab.slice((curPage - 1) * pageSize, curPage * pageSize);
+
+  const fmtDate = (ts) => {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    const p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+
+  const switchTab = (s) => { setStatusTab(s); setSelected(new Set()); setPage(1); setNotice(null); };
+
+  const toggleSelect = (id) => {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  };
+  const allInTabSelected = inThisTab.length > 0 && inThisTab.every(r => selected.has(r.id));
+  const toggleSelectAll = () => {
+    if (allInTabSelected) setSelected(new Set());
+    else setSelected(new Set(inThisTab.map(r => r.id)));
+  };
+
+  // ── 承認処理 ──
+  const approve = async (ids) => {
+    setProcessing(true);
+    const targets = requests.filter(r => ids.includes(r.id));
+    const existing = new Set(words.map(w => w.jukugo));
+    const seen = new Set();
+    let approved = 0, skipped = 0;
+    const newWords = [];
+    const updatedReqs = [...requests];
+
+    for (const req of targets) {
+      const dup = existing.has(req.jukugo) || seen.has(req.jukugo);
+      if (dup) {
+        // 重複：wordsに追加せず、statusだけapprovedに（approved_word_idはnull）
+        const { data } = await supabase.from("word_requests")
+          .update({ status: "approved", reviewed_at: new Date().toISOString(), approved_word_id: null })
+          .eq("id", req.id).select();
+        if (data) { const i = updatedReqs.findIndex(r => r.id === req.id); updatedReqs[i] = data[0]; }
+        skipped++;
+      } else {
+        const { data: wordData } = await supabase.from("words")
+          .insert([{ jukugo: req.jukugo, yomi: req.yomi, relation: req.relation, meaning: req.meaning || "", example: req.example || "" }])
+          .select();
+        if (wordData) {
+          newWords.push(wordData[0]);
+          seen.add(req.jukugo);
+          const { data } = await supabase.from("word_requests")
+            .update({ status: "approved", reviewed_at: new Date().toISOString(), approved_word_id: wordData[0].id })
+            .eq("id", req.id).select();
+          if (data) { const i = updatedReqs.findIndex(r => r.id === req.id); updatedReqs[i] = data[0]; }
+          approved++;
+        }
+      }
+    }
+
+    if (newWords.length > 0) setWords([...words, ...newWords]);
+    setRequests(updatedReqs);
+    setSelected(new Set());
+    setProcessing(false);
+    setNotice({ approved, skipped });
+  };
+
+  // ── 却下処理 ──
+  const reject = async (ids) => {
+    setProcessing(true);
+    const updatedReqs = [...requests];
+    let rejected = 0;
+    for (const id of ids) {
+      const { data } = await supabase.from("word_requests")
+        .update({ status: "rejected", reviewed_at: new Date().toISOString() })
+        .eq("id", id).select();
+      if (data) { const i = updatedReqs.findIndex(r => r.id === id); updatedReqs[i] = data[0]; rejected++; }
+    }
+    setRequests(updatedReqs);
+    setSelected(new Set());
+    setProcessing(false);
+    setNotice({ rejected });
+  };
+
+  // ── pendingに戻す ──
+  const revertToPending = async (req) => {
+    setProcessing(true);
+    // approvedで、wordsに追加していたものはwordsから削除
+    if (req.status === "approved" && req.approved_word_id) {
+      await supabase.from("words").delete().eq("id", req.approved_word_id);
+      setWords(words.filter(w => w.id !== req.approved_word_id));
+    }
+    const { data } = await supabase.from("word_requests")
+      .update({ status: "pending", approved_word_id: null })
+      .eq("id", req.id).select();
+    if (data) setRequests(requests.map(r => r.id === req.id ? data[0] : r));
+    setProcessing(false);
+    setNotice({ reverted: 1 });
+  };
+
+  // ── 完全削除 ──
+  const hardDelete = async (id) => {
+    setProcessing(true);
+    await supabase.from("word_requests").delete().eq("id", id);
+    setRequests(requests.filter(r => r.id !== id));
+    setProcessing(false);
+    setNotice({ deleted: 1 });
+  };
+
+  // ── 一括処理の確認を挟む ──
+  const askConfirm = (action, scope) => {
+    // scope: "selected" | "all"
+    const ids = scope === "all" ? inThisTab.map(r => r.id) : [...selected].filter(id => inThisTab.some(r => r.id === id));
+    if (ids.length === 0) return;
+    const verb = action === "approve" ? "承認" : "却下";
+    const scopeLabel = scope === "all" ? `未処理の全${ids.length}件` : `選択した${ids.length}件`;
+    setConfirm({ action, ids, label: `${scopeLabel}を${verb}します。よろしいですか？` });
+  };
+
+  const runConfirmed = async () => {
+    const { action, ids } = confirm;
+    setConfirm(null);
+    if (action === "approve") await approve(ids);
+    else await reject(ids);
+  };
+
+  const card = { background: "#fff", borderRadius: 10, border: "1px solid #E7E5E4", overflow: "hidden" };
+  const tabBtn = (active) => ({
+    background: active ? "#1E3A5F" : "#F5F4F0", color: active ? "#fff" : "#78716C",
+    border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 13,
+    fontWeight: active ? 700 : 400, cursor: "pointer",
+  });
+  const actBtn = (bg, color, border) => ({
+    background: bg, color, border: border || "none", borderRadius: 6,
+    padding: "7px 14px", fontSize: 12, fontWeight: 700,
+    cursor: processing ? "default" : "pointer", opacity: processing ? 0.6 : 1,
+  });
+
+  if (loading) return (
+    <div style={{ ...ff, textAlign: "center", padding: "60px 20px", color: "#78716C" }}>読み込み中…</div>
+  );
+
+  const selectedInTab = [...selected].filter(id => inThisTab.some(r => r.id === id)).length;
+
+  return (
+    <div style={{ ...ff, maxWidth: 1120, margin: "0 auto", padding: "20px 16px" }}>
+
+      {/* status切り替え */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={() => switchTab("pending")} style={tabBtn(statusTab === "pending")}>未処理 ({counts.pending})</button>
+        <button onClick={() => switchTab("approved")} style={tabBtn(statusTab === "approved")}>承認済 ({counts.approved})</button>
+        <button onClick={() => switchTab("rejected")} style={tabBtn(statusTab === "rejected")}>却下済 ({counts.rejected})</button>
+      </div>
+
+      {/* 通知 */}
+      {notice && (
+        <div style={{ background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 13, color: "#1E40AF", fontWeight: 700 }}>
+            {notice.approved != null && `✅ ${notice.approved}件を承認しました`}
+            {notice.skipped > 0 && `（うち重複のため ${notice.skipped}件は登録済みとしてスキップ）`}
+            {notice.rejected != null && `🚫 ${notice.rejected}件を却下しました`}
+            {notice.reverted != null && `↩️ 未処理に戻しました`}
+            {notice.deleted != null && `🗑️ 完全に削除しました`}
+          </span>
+          <button onClick={() => setNotice(null)} style={{ background: "none", border: "none", fontSize: 18, color: "#1E40AF", cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+      )}
+
+      {/* 一括処理（未処理タブのみ）*/}
+      {statusTab === "pending" && inThisTab.length > 0 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <button onClick={() => askConfirm("approve", "all")} disabled={processing} style={actBtn("#065F46", "#fff")}>全て承認する</button>
+          <button onClick={() => askConfirm("reject", "all")} disabled={processing} style={actBtn("#991B1B", "#fff")}>全て却下する</button>
+          <div style={{ width: 1, height: 20, background: "#E7E5E4", margin: "0 4px" }} />
+          <button onClick={() => askConfirm("approve", "selected")} disabled={processing || selectedInTab === 0} style={actBtn(selectedInTab === 0 ? "#E7E5E4" : "#065F46", selectedInTab === 0 ? "#A8A29E" : "#fff")}>選択した{selectedInTab}件を承認</button>
+          <button onClick={() => askConfirm("reject", "selected")} disabled={processing || selectedInTab === 0} style={actBtn(selectedInTab === 0 ? "#E7E5E4" : "#991B1B", selectedInTab === 0 ? "#A8A29E" : "#fff")}>選択した{selectedInTab}件を却下</button>
+        </div>
+      )}
+
+      {/* テーブル */}
+      <div style={card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderBottom: "1px solid #F0EFEE", background: "#FAFAF9" }}>
+          <div style={{ fontSize: 12, color: "#78716C" }}>
+            <span style={{ fontWeight: 700, color: "#1C1917" }}>{inThisTab.length}</span> 件
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11, color: "#A8A29E", marginRight: 2 }}>表示件数</span>
+            {[20, 50, 100].map(n => (
+              <button key={n} onClick={() => { setPageSize(n); setPage(1); }} style={{ background: pageSize === n ? "#1E3A5F" : "#F5F4F0", color: pageSize === n ? "#fff" : "#78716C", border: "none", borderRadius: 5, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: pageSize === n ? 700 : 400 }}>{n}</button>
+            ))}
+          </div>
+        </div>
+
+        {rows.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "60px 20px", color: "#A8A29E", fontSize: 14 }}>
+            {statusTab === "pending" ? "未処理のリクエストはありません" : statusTab === "approved" ? "承認済のリクエストはありません" : "却下済のリクエストはありません"}
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, tableLayout: "fixed" }}>
+              <colgroup>
+                {statusTab === "pending" && <col style={{ width: 40 }} />}
+                <col style={{ width: 130 }} />
+                <col style={{ width: 36 }} /><col style={{ width: 64 }} /><col style={{ width: 90 }} />
+                <col style={{ width: 96 }} /><col style={{ width: 180 }} /><col style={{ width: 180 }} />
+                <col style={{ width: 140 }} />
+                {statusTab !== "pending" && <col style={{ width: 150 }} />}
+              </colgroup>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #E7E5E4", background: "#FAFAF9" }}>
+                  {statusTab === "pending" && (
+                    <th style={{ padding: "10px 8px", textAlign: "center" }}>
+                      <input type="checkbox" checked={allInTabSelected} onChange={toggleSelectAll} style={{ accentColor: "#1E3A5F", cursor: "pointer" }} />
+                    </th>
+                  )}
+                  <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#78716C", letterSpacing: 1 }}>操作</th>
+                  {["#","熟語","読み","対応関係","意味","例文","申請日時"].map(h => (
+                    <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#78716C", letterSpacing: 1, whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                  {statusTab !== "pending" && <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#78716C", letterSpacing: 1 }}>取り消し</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((req, i) => {
+                  const rel = RMAP[req.relation];
+                  return (
+                    <tr key={req.id} style={{ borderBottom: "1px solid #F5F4F0" }}>
+                      {statusTab === "pending" && (
+                        <td style={{ padding: "11px 8px", textAlign: "center" }}>
+                          <input type="checkbox" checked={selected.has(req.id)} onChange={() => toggleSelect(req.id)} style={{ accentColor: "#1E3A5F", cursor: "pointer" }} />
+                        </td>
+                      )}
+                      <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
+                        {statusTab === "pending" ? (
+                          <>
+                            <button onClick={() => approve([req.id])} disabled={processing} style={{ background: "none", color: "#065F46", border: "1px solid #6EE7B7", borderRadius: 5, padding: "4px 10px", fontSize: 11, cursor: "pointer", marginRight: 6, fontWeight: 600 }}>承認</button>
+                            <button onClick={() => reject([req.id])} disabled={processing} style={{ background: "none", color: "#991B1B", border: "1px solid #FCA5A5", borderRadius: 5, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>却下</button>
+                          </>
+                        ) : (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: statusTab === "approved" ? "#065F46" : "#991B1B" }}>
+                            {statusTab === "approved" ? "✅ 承認済" : "🚫 却下済"}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "11px 14px", color: "#C8C4BD", fontSize: 11 }}>{(curPage - 1) * pageSize + i + 1}</td>
+                      <td style={{ padding: "11px 14px", fontWeight: 700, fontSize: 18, letterSpacing: 2, color: "#1C1917", whiteSpace: "nowrap" }}>{req.jukugo}</td>
+                      <td style={{ padding: "11px 14px", color: "#78716C", fontSize: 12, whiteSpace: "nowrap" }}>{req.yomi}</td>
+                      <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
+                        <span style={{ background: rel?.bg, color: rel?.color, border: `1px solid ${rel?.border}`, borderRadius: 4, padding: "3px 8px", fontSize: 11, fontWeight: 700 }}>{req.relation}</span>
+                      </td>
+                      <td style={{ padding: "11px 14px", color: "#292524", fontSize: 13, lineHeight: 1.5 }}>{req.meaning || <span style={{ color: "#D6D3D1" }}>—</span>}</td>
+                      <td style={{ padding: "11px 14px", color: "#78716C", fontSize: 12 }}>{req.example || <span style={{ color: "#D6D3D1" }}>—</span>}</td>
+                      <td style={{ padding: "11px 14px", color: "#A8A29E", fontSize: 11, whiteSpace: "nowrap" }}>{fmtDate(req.created_at)}</td>
+                      {statusTab !== "pending" && (
+                        <td style={{ padding: "11px 14px", whiteSpace: "nowrap" }}>
+                          <button onClick={() => revertToPending(req)} disabled={processing} style={{ background: "none", color: "#1E3A5F", border: "1px solid #C8D8E8", borderRadius: 5, padding: "4px 10px", fontSize: 11, cursor: "pointer", marginRight: 6, fontWeight: 600 }}>未処理に戻す</button>
+                          {statusTab === "rejected" && (
+                            <button onClick={() => hardDelete(req.id)} disabled={processing} style={{ background: "none", color: "#991B1B", border: "1px solid #FCA5A5", borderRadius: 5, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>完全削除</button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {totalPages > 1 && (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, padding: "12px", borderTop: "1px solid #F0EFEE" }}>
+            <button onClick={() => setPage(1)} disabled={curPage === 1} style={{ background: "#F5F4F0", color: curPage === 1 ? "#D6D3D1" : "#57534E", border: "none", borderRadius: 5, width: 32, height: 30, fontSize: 14, cursor: curPage === 1 ? "default" : "pointer" }}>«</button>
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={curPage === 1} style={{ background: "#F5F4F0", color: curPage === 1 ? "#D6D3D1" : "#57534E", border: "none", borderRadius: 5, width: 32, height: 30, fontSize: 14, cursor: curPage === 1 ? "default" : "pointer" }}>‹</button>
+            {Array.from({ length: Math.min(7, totalPages) }, (_, idx) => {
+              const start = Math.max(1, Math.min(curPage - 3, totalPages - 6));
+              return start + idx;
+            }).filter(n => n >= 1 && n <= totalPages).map(n => (
+              <button key={n} onClick={() => setPage(n)} style={{ background: n === curPage ? "#1E3A5F" : "#F5F4F0", color: n === curPage ? "#fff" : "#57534E", border: "none", borderRadius: 5, width: 32, height: 30, fontSize: 13, cursor: "pointer", fontWeight: n === curPage ? 700 : 400 }}>{n}</button>
+            ))}
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={curPage === totalPages} style={{ background: "#F5F4F0", color: curPage === totalPages ? "#D6D3D1" : "#57534E", border: "none", borderRadius: 5, width: 32, height: 30, fontSize: 14, cursor: curPage === totalPages ? "default" : "pointer" }}>›</button>
+            <button onClick={() => setPage(totalPages)} disabled={curPage === totalPages} style={{ background: "#F5F4F0", color: curPage === totalPages ? "#D6D3D1" : "#57534E", border: "none", borderRadius: 5, width: 32, height: 30, fontSize: 14, cursor: curPage === totalPages ? "default" : "pointer" }}>»</button>
+          </div>
+        )}
+      </div>
+
+      {/* 確認ダイアログ */}
+      {confirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: 24, maxWidth: 360, width: "100%" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#1C1917", marginBottom: 8 }}>確認</div>
+            <div style={{ fontSize: 13, color: "#57534E", marginBottom: 20, lineHeight: 1.6 }}>{confirm.label}</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setConfirm(null)} style={{ background: "#F5F4F0", color: "#57534E", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, cursor: "pointer", fontWeight: 600 }}>キャンセル</button>
+              <button onClick={runConfirmed} style={{ background: confirm.action === "approve" ? "#065F46" : "#991B1B", color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, cursor: "pointer", fontWeight: 700 }}>
+                {confirm.action === "approve" ? "承認する" : "却下する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── メインアプリ ──────────────────────────────────────────
 export default function App() {
   const [words,       setWords]       = useState([]);
@@ -727,7 +1061,7 @@ export default function App() {
       {/* ── タブ ── */}
       <div style={{ background: "#fff", borderBottom: "1px solid #E7E5E4" }}>
         <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex" }}>
-          {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"], ...(isAdmin ? [["settings", "⚙️ 設定"]] : [])].map(([tab, label]) => (
+          {[["list", "📋 一覧"], ["quiz", "🧠 クイズ"], ...(isAdmin ? [["requests", "📥 リクエスト"], ["settings", "⚙️ 設定"]] : [])].map(([tab, label]) => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
               background: "none", border: "none", padding: "10px 24px",
               fontSize: 14, fontWeight: activeTab === tab ? 700 : 400,
@@ -741,6 +1075,9 @@ export default function App() {
 
       {/* ── クイズタブ ── */}
       {activeTab === "quiz" && <QuizMode words={words} />}
+
+      {/* ── リクエストタブ ── */}
+      {activeTab === "requests" && isAdmin && <RequestsMode words={words} setWords={setWords} />}
 
       {/* ── 設定タブ ── */}
       {activeTab === "settings" && isAdmin && <SettingsMode words={words} setWords={setWords} />}
