@@ -53,15 +53,16 @@ function QuizMode({ words }) {
   const [selected, setSelected] = useState(null);
   const [answers, setAnswers] = useState([]);
 
-  const canStart = words.length >= 1;
+  const quizWords = words.filter(w => w.relation !== "その他");
+  const canStart = quizWords.length >= 1;
 
   const startQuiz = () => {
-    const count = Math.min(quizCount, words.length);
-    const shuffled = [...words].sort(() => Math.random() - 0.5).slice(0, count);
+    const count = Math.min(quizCount, quizWords.length);
+    const shuffled = [...quizWords].sort(() => Math.random() - 0.5).slice(0, count);
     const qs = shuffled.map(word => {
       const correct = word.relation;
       const others = RELATION_VALUES
-        .filter(v => v !== correct)
+        .filter(v => v !== correct && v !== "その他")
         .sort(() => Math.random() - 0.5)
         .slice(0, 3);
       const choices = [correct, ...others].sort(() => Math.random() - 0.5);
@@ -123,7 +124,7 @@ function QuizMode({ words }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: "#78716C", marginBottom: 10, letterSpacing: 1 }}>問題数を選択</div>
         <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 28 }}>
           {[5, 10, 20].map(n => {
-            const available = words.length >= n;
+            const available = quizWords.length >= n;
             return (
               <button key={n} onClick={() => available && setQuizCount(n)}
                 style={{
@@ -141,7 +142,8 @@ function QuizMode({ words }) {
         </div>
 
         <div style={{ fontSize: 12, color: "#A8A29E", marginBottom: 20 }}>
-          登録単語数: <span style={{ fontWeight: 700, color: "#1C1917" }}>{words.length}</span> 語
+          クイズ対象: <span style={{ fontWeight: 700, color: "#1C1917" }}>{quizWords.length}</span> 語
+          {words.length !== quizWords.length && <span style={{ color: "#C8C4BD" }}>（全 {words.length} 語中）</span>}
         </div>
 
         <button onClick={startQuiz} disabled={!canStart} style={{
@@ -415,6 +417,14 @@ function SettingsMode({ words, setWords }) {
 
         if (!jukugo || !yomi || !meaning) {
           errors.push(`${r.row}行目：熟語・読み仮名・意味は必須です`);
+          continue;
+        }
+        if (jukugo.length < 2) {
+          errors.push(`${r.row}行目：熟語は2文字以上必要です（「${jukugo}」）`);
+          continue;
+        }
+        if (!/^[ぁ-ん]+$/.test(yomi)) {
+          errors.push(`${r.row}行目：読み仮名はひらがなのみで入力してください（「${yomi}」）`);
           continue;
         }
         if (!RELATION_VALUES.includes(relation)) {
@@ -911,7 +921,10 @@ export default function App() {
   // 管理者：直接登録/更新
   const handleSubmit = async () => {
     const { jukugo, yomi, meaning } = form;
-    if (!jukugo.trim() || !yomi.trim() || !meaning.trim()) { setFormError("熟語・読み仮名・意味は必須です"); return; }
+    const jukugoT = jukugo.trim(), yomiT = yomi.trim();
+    if (!jukugoT || !yomiT || !meaning.trim()) { setFormError("熟語・読み仮名・意味は必須です"); return; }
+    if (jukugoT.length < 2) { setFormError("熟語は2文字以上で入力してください"); return; }
+    if (!/^[ぁ-ん]+$/.test(yomiT)) { setFormError("読み仮名はひらがなのみで入力してください"); return; }
     setFormError("");
     setSaving(true);
     if (editId !== null) {
@@ -928,7 +941,10 @@ export default function App() {
   // 一般ユーザー：登録リクエスト送信
   const handleRequest = async () => {
     const { jukugo, yomi, relation } = form;
-    if (!jukugo.trim() || !yomi.trim() || !relation.trim()) { setFormError("熟語・読み仮名・対応関係は必須です"); return; }
+    const jukugoT = jukugo.trim(), yomiT = yomi.trim();
+    if (!jukugoT || !yomiT || !relation.trim()) { setFormError("熟語・読み仮名・対応関係は必須です"); return; }
+    if (jukugoT.length < 2) { setFormError("熟語は2文字以上で入力してください"); return; }
+    if (!/^[ぁ-ん]+$/.test(yomiT)) { setFormError("読み仮名はひらがなのみで入力してください"); return; }
     setFormError("");
     setSaving(true);
     const { error } = await supabase.from("word_requests").insert([{
