@@ -578,7 +578,7 @@ function RequestsMode({ words, setWords }) {
     const targets = requests.filter(r => ids.includes(r.id));
     const existing = new Set(words.map(w => w.jukugo));
     const seen = new Set();
-    let approved = 0, skipped = 0;
+    let approved = 0, skipped = 0, failed = 0;
     const newWords = [];
     const updatedReqs = [...requests];
 
@@ -586,24 +586,27 @@ function RequestsMode({ words, setWords }) {
       const dup = existing.has(req.jukugo) || seen.has(req.jukugo);
       if (dup) {
         // 重複：wordsに追加せず、statusだけapprovedに（approved_word_idはnull）
-        const { data } = await supabase.from("word_requests")
+        const { data, error } = await supabase.from("word_requests")
           .update({ status: "approved", reviewed_at: new Date().toISOString(), approved_word_id: null })
           .eq("id", req.id).select();
-        if (data) { const i = updatedReqs.findIndex(r => r.id === req.id); updatedReqs[i] = data[0]; }
+        if (error) { failed++; continue; }
+        const i = updatedReqs.findIndex(r => r.id === req.id);
+        updatedReqs[i] = data[0];
         skipped++;
       } else {
-        const { data: wordData } = await supabase.from("words")
+        const { data: wordData, error: wordError } = await supabase.from("words")
           .insert([{ jukugo: req.jukugo, yomi: req.yomi, relation: req.relation, meaning: req.meaning || "", example: req.example || "" }])
           .select();
-        if (wordData) {
-          newWords.push(wordData[0]);
-          seen.add(req.jukugo);
-          const { data } = await supabase.from("word_requests")
-            .update({ status: "approved", reviewed_at: new Date().toISOString(), approved_word_id: wordData[0].id })
-            .eq("id", req.id).select();
-          if (data) { const i = updatedReqs.findIndex(r => r.id === req.id); updatedReqs[i] = data[0]; }
-          approved++;
-        }
+        if (wordError) { failed++; continue; }
+        newWords.push(wordData[0]);
+        seen.add(req.jukugo);
+        const { data, error: reqError } = await supabase.from("word_requests")
+          .update({ status: "approved", reviewed_at: new Date().toISOString(), approved_word_id: wordData[0].id })
+          .eq("id", req.id).select();
+        if (reqError) { failed++; continue; }
+        const i = updatedReqs.findIndex(r => r.id === req.id);
+        updatedReqs[i] = data[0];
+        approved++;
       }
     }
 
@@ -611,24 +614,27 @@ function RequestsMode({ words, setWords }) {
     setRequests(updatedReqs);
     setSelected(new Set());
     setProcessing(false);
-    setNotice({ approved, skipped });
+    setNotice({ approved, skipped, failed });
   };
 
   // ── 却下処理 ──
   const reject = async (ids) => {
     setProcessing(true);
     const updatedReqs = [...requests];
-    let rejected = 0;
+    let rejected = 0, failed = 0;
     for (const id of ids) {
-      const { data } = await supabase.from("word_requests")
+      const { data, error } = await supabase.from("word_requests")
         .update({ status: "rejected", reviewed_at: new Date().toISOString() })
         .eq("id", id).select();
-      if (data) { const i = updatedReqs.findIndex(r => r.id === id); updatedReqs[i] = data[0]; rejected++; }
+      if (error) { failed++; continue; }
+      const i = updatedReqs.findIndex(r => r.id === id);
+      updatedReqs[i] = data[0];
+      rejected++;
     }
     setRequests(updatedReqs);
     setSelected(new Set());
     setProcessing(false);
-    setNotice({ rejected });
+    setNotice({ rejected, failed });
   };
 
   // ── pendingに戻す ──
@@ -636,13 +642,15 @@ function RequestsMode({ words, setWords }) {
     setProcessing(true);
     // approvedで、wordsに追加していたものはwordsから削除
     if (req.status === "approved" && req.approved_word_id) {
-      await supabase.from("words").delete().eq("id", req.approved_word_id);
+      const { error: deleteError } = await supabase.from("words").delete().eq("id", req.approved_word_id);
+      if (deleteError) { setProcessing(false); setNotice({ error: "熟語の削除に失敗しました。再度お試しください" }); return; }
       setWords(words.filter(w => w.id !== req.approved_word_id));
     }
-    const { data } = await supabase.from("word_requests")
+    const { data, error } = await supabase.from("word_requests")
       .update({ status: "pending", approved_word_id: null })
       .eq("id", req.id).select();
-    if (data) setRequests(requests.map(r => r.id === req.id ? data[0] : r));
+    if (error) { setProcessing(false); setNotice({ error: "ステータスの更新に失敗しました。再度お試しください" }); return; }
+    setRequests(requests.map(r => r.id === req.id ? data[0] : r));
     setProcessing(false);
     setNotice({ reverted: 1 });
   };
@@ -650,7 +658,8 @@ function RequestsMode({ words, setWords }) {
   // ── 完全削除 ──
   const hardDelete = async (id) => {
     setProcessing(true);
-    await supabase.from("word_requests").delete().eq("id", id);
+    const { error } = await supabase.from("word_requests").delete().eq("id", id);
+    if (error) { setProcessing(false); setNotice({ error: "削除に失敗しました。再度お試しください" }); return; }
     setRequests(requests.filter(r => r.id !== id));
     setProcessing(false);
     setNotice({ deleted: 1 });
@@ -703,15 +712,17 @@ function RequestsMode({ words, setWords }) {
 
       {/* 通知 */}
       {notice && (
-        <div style={{ background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "#1E40AF", fontWeight: 700 }}>
+        <div style={{ background: notice.error ? "#FEE2E2" : "#EFF6FF", border: `1px solid ${notice.error ? "#FCA5A5" : "#93C5FD"}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 13, color: notice.error ? "#991B1B" : "#1E40AF", fontWeight: 700 }}>
+            {notice.error && `⚠️ ${notice.error}`}
             {notice.approved != null && `✅ ${notice.approved}件を承認しました`}
             {notice.skipped > 0 && `（うち重複のため ${notice.skipped}件は登録済みとしてスキップ）`}
             {notice.rejected != null && `🚫 ${notice.rejected}件を却下しました`}
+            {notice.failed > 0 && `　⚠️ ${notice.failed}件は通信エラーのため未処理のまま残っています`}
             {notice.reverted != null && `↩️ 未処理に戻しました`}
             {notice.deleted != null && `🗑️ 完全に削除しました`}
           </span>
-          <button onClick={() => setNotice(null)} style={{ background: "none", border: "none", fontSize: 18, color: "#1E40AF", cursor: "pointer", lineHeight: 1 }}>×</button>
+          <button onClick={() => setNotice(null)} style={{ background: "none", border: "none", fontSize: 18, color: notice.error ? "#991B1B" : "#1E40AF", cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
       )}
 
@@ -855,6 +866,7 @@ function RequestsMode({ words, setWords }) {
 export default function App() {
   const [words,       setWords]       = useState([]);
   const [loading,     setLoading]     = useState(true);
+  const [loadError,   setLoadError]   = useState(false);
   const [saving,      setSaving]      = useState(false);
   const [form,        setForm]        = useState(EMPTY);
   const [editId,      setEditId]      = useState(null);
@@ -872,6 +884,7 @@ export default function App() {
   const [dupWarning,  setDupWarning]  = useState(false);
   const [requestSent, setRequestSent] = useState(false); // 申請完了メッセージ
   const [cooldown,    setCooldown]    = useState(false);  // 連打防止
+  const [listError,   setListError]   = useState("");     // 一覧タブのエラー通知
 
   // ── 認証関連 ──
   const isAdminUrl = typeof window !== "undefined" && window.location.pathname.startsWith("/adminmoushiwaonly");
@@ -911,8 +924,9 @@ export default function App() {
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from("words").select("*").order("id", { ascending: true });
-      if (data) setWords(data);
+      const { data, error } = await supabase.from("words").select("*").order("id", { ascending: true });
+      if (error) { setLoadError(true); setLoading(false); return; }
+      setWords(data);
       setLoading(false);
     };
     load();
@@ -928,11 +942,13 @@ export default function App() {
     setFormError("");
     setSaving(true);
     if (editId !== null) {
-      const { data } = await supabase.from("words").update({ jukugo: form.jukugo, yomi: form.yomi, relation: form.relation, meaning: form.meaning, example: form.example }).eq("id", editId).select();
-      if (data) setWords(words.map(w => w.id === editId ? data[0] : w));
+      const { data, error } = await supabase.from("words").update({ jukugo: form.jukugo, yomi: form.yomi, relation: form.relation, meaning: form.meaning, example: form.example }).eq("id", editId).select();
+      if (error) { setFormError("更新に失敗しました。再度お試しください"); setSaving(false); return; }
+      setWords(words.map(w => w.id === editId ? data[0] : w));
     } else {
-      const { data } = await supabase.from("words").insert([{ jukugo: form.jukugo, yomi: form.yomi, relation: form.relation, meaning: form.meaning, example: form.example }]).select();
-      if (data) setWords([...words, data[0]]);
+      const { data, error } = await supabase.from("words").insert([{ jukugo: form.jukugo, yomi: form.yomi, relation: form.relation, meaning: form.meaning, example: form.example }]).select();
+      if (error) { setFormError("登録に失敗しました。再度お試しください"); setSaving(false); return; }
+      setWords([...words, data[0]]);
     }
     setSaving(false);
     setForm(EMPTY); setEditId(null); setShowForm(false);
@@ -966,7 +982,8 @@ export default function App() {
   };
 
   const handleDelete = async (id) => {
-    await supabase.from("words").delete().eq("id", id);
+    const { error } = await supabase.from("words").delete().eq("id", id);
+    if (error) { setConfirmDel(null); setListError("削除に失敗しました。再度お試しください"); return; }
     setWords(words.filter(w => w.id !== id));
     setConfirmDel(null);
   };
@@ -997,6 +1014,16 @@ export default function App() {
 
   if (loading || !authChecked) return (
     <div style={{ ...ff, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#F5F4F0", color: "#78716C" }}>読み込み中…</div>
+  );
+
+  if (loadError) return (
+    <div style={{ ...ff, display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#F5F4F0" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#991B1B", marginBottom: 8 }}>⚠️ データの読み込みに失敗しました</div>
+        <div style={{ fontSize: 13, color: "#78716C", marginBottom: 20 }}>通信状況を確認してページを再読み込みしてください</div>
+        <button onClick={() => window.location.reload()} style={{ background: "#1E3A5F", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>再読み込み</button>
+      </div>
+    </div>
   );
 
   // 管理者URLにアクセスしたが未ログイン → ログイン画面
@@ -1101,6 +1128,14 @@ export default function App() {
       {/* ── 一覧タブ ── */}
       {activeTab === "list" && (
         <div style={{ maxWidth: 1120, margin: "0 auto", padding: "20px 16px" }}>
+
+          {/* エラー通知 */}
+          {listError && (
+            <div style={{ background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 10, padding: "14px 18px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 13, color: "#991B1B", fontWeight: 700 }}>⚠️ {listError}</span>
+              <button onClick={() => setListError("")} style={{ background: "none", border: "none", fontSize: 18, color: "#991B1B", cursor: "pointer", lineHeight: 1 }}>×</button>
+            </div>
+          )}
 
           {/* 申請完了メッセージ（一般ユーザー）*/}
           {!isAdmin && requestSent && (
